@@ -27,12 +27,6 @@ class Bet:
 
         self.prev = None
 
-    def log_odds(self):
-        return logit(self.p)
-
-    def force(self):
-        return self.amount * self.log_odds()
-
     def points_if_yes(self):
         if self.prev is None:
             return 0
@@ -43,52 +37,27 @@ class Bet:
             return 0
         return ((1-self.p) / (1-self.prev.p)).ln()
 
-    def ratio(self):
-        if self.prev is None:
-            return 0
-
-        if_yes = self.points_if_yes()
-        if_no = self.points_if_no()
-        downside = min(if_yes, if_no)
-        upside = max(if_yes, if_no)
-        assert upside > 0
-        assert downside < 0
-        return upside / -downside
-
-    def payoff(self):
-        return self.ratio() * self.amount
-
 
 header = (
     'Name     '
     'Amount    '
     'Prob  '
-    'LogOdds    '
-    'Force    '
     'IfYes     '
     'IfNo   '
-    'Ratio  '
-    'Payoff '
     'MarketSize '
-    'TotalForce '
-    'MarketProb'
 )
 fmt = (
     '{:<6} '  # name
     '{:>8} '  # amount
     '{: >6.1f}% '  # probability
-    '{:>+8.2f} '  # log odds
-    '{:>+8.2f} '  # force
     '{:>+8.3f} '  # if_yes
     '{:>+8.3f} '  # if_no
-    '{:>7.2f} '  # ratio
-    '{:>7} '  # payoff
     '{:>10} '  # market_size
-    '{:>+10.2f} '  # total_force
-    '{: >9.1f}%'  # market_probability
 )
 
 def run_market(bets):
+    names = sorted(set( b.name for b in bets ))
+
     print(header)
 
     payoffs_if_yes = defaultdict(Decimal)
@@ -96,44 +65,24 @@ def run_market(bets):
 
     for b1, b2 in pairwise(bets):
         b2.prev = b1
-
+    
     market_size = 0  # Total amount of all bets.
-    total_force = 0  # Total log odds, scaled by dollar amount.
     for b in bets:
         market_size += b.amount
-        total_force += b.force()
-        if market_size == 0:
-            market_probability = 0.5
-        else:
-            market_probability = inv_logit(total_force / market_size)
 
         if_yes = b.points_if_yes()
         if_no = b.points_if_no()
-        ratio = b.ratio()
-        payoff = b.payoff()
+        payoffs_if_yes[b.name] += if_yes
+        payoffs_if_no[b.name] += if_no
 
         # If your bet fails, the most you can lose is the entire bet.
-        if b.prev is not None:
-            if b.p > b.prev.p:  # Bet increases probability.
-                payoffs_if_yes[b.name] += payoff
-                payoffs_if_no[b.name] += -b.amount
-            else:  # Bet decreases probability.
-                payoffs_if_yes[b.name] += -b.amount
-                payoffs_if_no[b.name] += payoff
-
         print(fmt.format(
             b.name,
             '${:,.0f}'.format(b.amount),
             100*b.p,
-            b.log_odds(),
-            b.force(),
             if_yes,
             if_no,
-            ratio,
-            '${:,.2f}'.format(payoff),
             '${:,.0f}'.format(market_size),
-            total_force,
-            100*market_probability,
         ))
 
     market_maker = bets[0].name
@@ -144,6 +93,9 @@ def run_market(bets):
     pprint({ name: float(payoff) for (name, payoff) in payoffs_if_yes.items()})
     print('If No:')
     pprint({ name: float(payoff) for (name, payoff) in payoffs_if_no.items()})
+
+    for name in names:
+        print(name, payoffs_if_yes[name] / payoffs_if_no[name])
 
 
 def pairwise(iterable):
@@ -157,14 +109,14 @@ def pairwise(iterable):
     return zip(a, b)
 
 
-
 bets = [
     Bet('SD', 5, .7),
+    # Bet('DS', 5, .701),
     Bet('CO', 1, .75),
-    Bet('XCO', 1, .6533),
-    Bet('XSD', 5, .3),
-    Bet('XX', 20, .01),
-    Bet('CO', 1, .75),
+    # Bet('XCO', 1, .6533),
+    # Bet('XSD', 5, .3),
+    # Bet('XX', 20, .01),
+    # Bet('CO', 1, .75),
     # Bet('ZZ', 2, '0.999999999999999999999'),
 ]
 
