@@ -113,12 +113,13 @@ def run_market(bets):
         payoff = b.payoff()
 
         # If your bet fails, the most you can lose is the entire bet.
-        if b.prev is not None and b.p > b.prev.p:  # Bet increases probability.
-            payoffs_if_yes[b.name] += payoff
-            payoffs_if_no[b.name] += -b.amount
-        else:  # Bet decreases probability.
-            payoffs_if_yes[b.name] += -b.amount
-            payoffs_if_no[b.name] += payoff
+        if b.prev is not None:
+            if b.p > b.prev.p:  # Bet increases probability.
+                payoffs_if_yes[b.name] += payoff
+                payoffs_if_no[b.name] += -b.amount
+            else:  # Bet decreases probability.
+                payoffs_if_yes[b.name] += -b.amount
+                payoffs_if_no[b.name] += payoff
 
         print(fmt.format(
             b.name,
@@ -134,6 +135,10 @@ def run_market(bets):
             total_force,
             100*market_probability,
         ))
+
+    market_maker = bets[0].name
+    payoffs_if_yes[market_maker] = -sum(payoffs_if_yes.values())
+    payoffs_if_no[market_maker] = -sum(payoffs_if_no.values())
 
     print('If Yes:')
     pprint({ name: float(payoff) for (name, payoff) in payoffs_if_yes.items()})
@@ -160,7 +165,7 @@ bets = [
     Bet('XSD', 5, .3),
     Bet('XX', 20, .01),
     Bet('CO', 1, .75),
-    Bet('ZZ', 2, '0.999999999999999999999'),
+    # Bet('ZZ', 2, '0.999999999999999999999'),
 ]
 
 run_market(bets)
