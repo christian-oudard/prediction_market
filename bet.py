@@ -1,126 +1,113 @@
-from pprint import pprint
-import itertools
-from collections import defaultdict
 from decimal import Decimal
 
 
-def logit(p):
-    """Log-odds of the probability."""
-    return (p / (1-p)).ln()
-
-def inv_logit(x):
-    return 1 / (1 + (-x).exp())
-
-
 class Bet:
-    def __init__(self, name, amount, probability):
+    def __init__(self, name, probability):
         """
         name: Bettor's name.
-        amount: Dollar amount of the bet.
         probability: Predicted probability of the event.
         """
         self.name = str(name)
-        self.amount = Decimal(amount)
-        assert self.amount >= 0
-        self.p = Decimal(probability)
+        self.p = Decimal(probability).quantize(Decimal('.0001'))
         assert 0 < self.p < 1
 
-        self.prev = None
 
-    def points_if_yes(self):
-        if self.prev is None:
-            return 0
-        return (self.p / self.prev.p).ln()
+class PredictionMarket:
 
-    def points_if_no(self):
-        if self.prev is None:
-            return 0
-        return ((1-self.p) / (1-self.prev.p)).ln()
+    def __init__(self, market_maker, proposition, initial_probability, endowment):
+        self.market_maker = market_maker
+        self.proposition = proposition
 
+        self.endowment = Decimal(endowment)
+        mm = Bet(market_maker, initial_probability)
+        self.bets = [mm]
 
-header = (
-    'Name     '
-    'Amount    '
-    'Prob  '
-    'IfYes     '
-    'IfNo   '
-    'MarketSize '
-)
-fmt = (
-    '{:<6} '  # name
-    '{:>8} '  # amount
-    '{: >6.1f}% '  # probability
-    '{:>+8.3f} '  # if_yes
-    '{:>+8.3f} '  # if_no
-    '{:>10} '  # market_size
-)
+        # Determine a scale that does not lose more money than the endowment.
+        # -endowment < payoff_yes < 0
+        # -endowment < payoff_no < 0
+        # -payoff_yes = scale * log(mm.p) - scale * log(99.99%)
+        # -payoff_no = scale * log(1-mm.p) - scale * log(1 - 0.01%)
+        # In both formulas, log(100%) = 0.
+        # -payoff_yes = scale * log(mm.p)
+        # -payoff_no = scale * log(1-mm.p)
+        # -payoff_yes / log(mm.p) = scale
+        # -payoff_no / log(1-mm.p) = scale
+        scale_yes = -endowment / mm.p.ln()
+        scale_no = -endowment / (1-mm.p).ln()
+        self.scale = min(scale_yes, scale_no)
 
-def run_market(bets):
-    names = sorted(set( b.name for b in bets ))
+    def score(self, p):
+        return self.scale * p.ln()
 
-    print(header)
+    def inv_score(self, amount):
+        return (amount / self.scale).exp()
 
-    payoffs_if_yes = defaultdict(Decimal)
-    payoffs_if_no = defaultdict(Decimal)
+    def update_market_maker(self, bet):
+        mm = self.bets[0]
+        mm.payoff_if_yes = self.score(mm.p) - self.score(bet.p)
+        mm.payoff_if_no = self.score(1-mm.p) - self.score(1-bet.p)
 
-    for b1, b2 in pairwise(bets):
-        b2.prev = b1
-    
-    market_size = 0  # Total amount of all bets.
-    for b in bets:
-        market_size += b.amount
+    def bet_probability(self, name, probability):
+        prev = self.bets[-1]
+        b = Bet(name, probability)
+        b.payoff_if_yes = self.score(b.p) - self.score(prev.p)
+        b.payoff_if_no = self.score(1-b.p) - self.score(1-prev.p)
+        self.bets.append(b)
 
-        if_yes = b.points_if_yes()
-        if_no = b.points_if_no()
-        payoffs_if_yes[b.name] += if_yes
-        payoffs_if_no[b.name] += if_no
+        self.update_market_maker(b)
 
-        # If your bet fails, the most you can lose is the entire bet.
-        print(fmt.format(
-            b.name,
-            '${:,.0f}'.format(b.amount),
-            100*b.p,
-            if_yes,
-            if_no,
-            '${:,.0f}'.format(market_size),
-        ))
+    def bet_dollars_yes(self, name, amount):
+        prev = self.bets[-1]
 
-    market_maker = bets[0].name
-    payoffs_if_yes[market_maker] = -sum(payoffs_if_yes.values())
-    payoffs_if_no[market_maker] = -sum(payoffs_if_no.values())
+        # Find the probability which, if the market goes to "no", loses exactly the desired amount.
+        # -amount < b.payoff_if_no < 0
+        # b.payoff_if_no = self.score(1-b.p) - self.score(1-prev.p)
+        # self.inv_score(b.payoff_if_no + self.score(1-prev.p)) = 1 - b.p
+        # b.p = 1 - self.inv_score(b.payoff_if_no + self.score(1-prev.p))
+        p = 1 - self.inv_score(-amount + self.score(1-prev.p))
+        self.bet_probability(name, p)
 
-    print('If Yes:')
-    pprint({ name: float(payoff) for (name, payoff) in payoffs_if_yes.items()})
-    print('If No:')
-    pprint({ name: float(payoff) for (name, payoff) in payoffs_if_no.items()})
+    def bet_dollars_no(self, name, amount):
+        prev = self.bets[-1]
 
-    for name in names:
-        print(name, payoffs_if_yes[name] / payoffs_if_no[name])
+        # Find the probability which, if the market goes to "yes", loses exactly the desired amount.
+        # -amount < b.payoff_if_no < 0
+        # b.payoff_if_yes = self.score(b.p) - self.score(prev.p)
+        # b.payoff_if_yes + self.score(prev.p) = self.score(b.p)
+        # self.inv_score(b.payoff_if_yes + self.score(prev.p)) = b.p
+        p = self.inv_score(-amount + self.score(prev.p))
+        self.bet_probability(name, p)
 
+    def show(self):
+        header = (
+            'Name      '
+            'Prob    '
+            'IfYes     '
+            'IfNo   '
+        )
+        fmt = (
+            '{:<6} '  # name
+            '{: >6.2f}% '  # probability
+            '{:>8} '  # if_yes
+            '{:>8} '  # if_no
+        )
 
-def pairwise(iterable):
-    """s -> (s0,s1), (s1,s2), (s2, s3), ...
-
-    >>> list(pairwise([1, 2, 3, 4]))
-    [(1, 2), (2, 3), (3, 4)]
-    """
-    a, b = itertools.tee(iterable)
-    next(b, None)
-    return zip(a, b)
-
-
-bets = [
-    Bet('SD', 5, .7),
-    # Bet('DS', 5, .701),
-    Bet('CO', 1, .75),
-    # Bet('XCO', 1, .6533),
-    # Bet('XSD', 5, .3),
-    # Bet('XX', 20, .01),
-    # Bet('CO', 1, .75),
-    # Bet('ZZ', 2, '0.999999999999999999999'),
-]
-
-run_market(bets)
+        # Show market outcome.
+        print(header)
+        for b in self.bets:
+            print(fmt.format(
+                b.name,
+                100*b.p,
+                '${:,.2f}'.format(b.payoff_if_yes),
+                '${:,.2f}'.format(b.payoff_if_no),
+            ))
 
 
+market = PredictionMarket('SD', 'I go to bed by 10:30 pm.', 0.70, 5)
+market.bet_dollars_yes('CO', 1)
+# market.bet_probability('YY', 0.83)
+# market.bet_probability('HH', 0.50)
+# market.bet_dollars_no('XX', 20)
+# market.bet_probability('ZZ', 0.9999)
 
+market.show()
